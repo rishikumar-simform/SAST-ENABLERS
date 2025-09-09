@@ -8,6 +8,10 @@ pr:
     include:
       - develop2
 
+variables:
+  SONAR_SCANNER_VERSION: '4.8.0.2856'    # Use the variable for vmImage
+
+
 stages:
   - stage: SecurityScans
     displayName: "Security Scans on PR"
@@ -87,22 +91,16 @@ stages:
               publishLocation: Container
 
           # SonarQube Analysis
-          - task: SonarQubePrepare@5
-            inputs:
-              SonarQube: 'YourSonarQubeServiceConnection'
-              scannerMode: 'CLI'
-              configMode: 'manual'
-              cliProjectKey: '$(Build.Repository.Name)'
-              cliProjectName: '$(Build.Repository.Name)'
-              extraProperties: |
-                sonar.verbose=true
-            displayName: "Prepare SonarQube Analysis"
-
-          - task: SonarQubeAnalyze@5
-            displayName: "Run SonarQube Analysis"
-
-          - task: SonarQubePublish@5
-            inputs:
-              pollingTimeoutSec: '300'
-            displayName: "Publish SonarQube Quality Gate (Non-blocking)"
-            continueOnError: true
+          - script: |
+                      # Install SonarQube Scanner
+                      wget -O /tmp/sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$(SONAR_SCANNER_VERSION).zip
+                      unzip /tmp/sonar-scanner.zip -d /tmp
+                      export PATH=$PATH:/tmp/sonar-scanner-$(SONAR_SCANNER_VERSION)/bin
+                      echo "Running SonarQube analysis..."
+                      sonar-scanner \
+                        -Dsonar.projectKey=$(SONAR_PROJECT_KEY) \
+                        -Dsonar.javascript.node.maxspace=8192 \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=$(SONAR_HOST_URL) \
+                        -Dsonar.login=$(SONAR_TOKEN)
+            displayName: "SonarQube Analysis"
