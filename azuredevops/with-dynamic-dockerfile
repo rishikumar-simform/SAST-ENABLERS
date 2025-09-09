@@ -1,0 +1,108 @@
+trigger:
+  branches:
+    include:
+      - develop2
+
+pr:
+  branches:
+    include:
+      - develop2
+
+stages:
+  - stage: SecurityScans
+    displayName: "Security Scans on PR"
+    jobs:
+      - job: GitleaksAndTrivy
+        displayName: "Run Gitleaks + Trivy Scans"
+        pool:
+          name:    # Using hosted pool
+
+        steps:
+          - checkout: self
+            fetchDepth: '0'
+
+          # Setup Gitleaks
+          - script: |
+              echo "Downloading Gitleaks..."
+              curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -o gitleaks.tar.gz
+              tar -xzf gitleaks.tar.gz
+              ls -l   # check contents
+              chmod +x gitleaks
+              ./gitleaks version
+            displayName: "Setup Gitleaks"
+
+          # Run Gitleaks scan
+          - script: |
+              echo "Running Gitleaks..."
+              ./gitleaks detect --source . --report-path gitleaks-report.json --exit-code 1
+            displayName: "Run Gitleaks Scan"
+            continueOnError: true   # Continue even if secrets found
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Upload Gitleaks Report"
+            inputs:
+              PathtoPublish: gitleaks-report.json
+              ArtifactName: gitleaks-report
+              publishLocation: Container
+
+          # Setup Trivy
+          - script: |
+              echo "Downloading Trivy..."
+              wget -q https://github.com/aquasecurity/trivy/releases/download/v0.51.1/trivy_0.51.1_Linux-64bit.tar.gz
+              tar -zxf trivy_0.51.1_Linux-64bit.tar.gz
+              ls -l   # check contents
+              chmod +x trivy
+              ./trivy --version
+            displayName: "Setup Trivy"
+
+          # Detect Dockerfile, build image, and scan it
+          - script: |
+              echo "Checking for Dockerfile..."
+              FILE=$(find . -type f -iname 'Dockerfile*' | head -n 1)
+              if [ -n "$FILE" ]; then
+                echo "Found Dockerfile: $FILE"
+                if docker build -f "$FILE" -t app:$(Build.SourceVersion) .; then
+                  echo "Running Trivy image scan..."
+                  ./trivy image --format table --output trivy-report.txt app:$(Build.SourceVersion) || echo "Trivy scan failed" > trivy-report.txt
+                else
+                  echo "Docker build failed. Skipping Trivy scan."
+                  echo "Docker build failed." > trivy-report.txt
+                fi
+              else
+                echo "No Dockerfile found. Skipping image scan."
+                echo "No Dockerfile found." > trivy-report.txt
+              fi
+
+              echo "--- Debug: Check if report exists ---"
+              ls -l trivy-report.txt || echo "Report file missing!"
+            displayName: "Run Trivy Docker Image Scan"
+
+
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Upload Trivy Docker Image Report"
+            inputs:
+              PathtoPublish: trivy-report.txt
+              ArtifactName: trivy-report
+              publishLocation: Container
+
+          # SonarQube Analysis
+          - task: SonarQubePrepare@5
+            inputs:
+              SonarQube: 'YourSonarQubeServiceConnection'
+              scannerMode: 'CLI'
+              configMode: 'manual'
+              cliProjectKey: '$(Build.Repository.Name)'
+              cliProjectName: '$(Build.Repository.Name)'
+              extraProperties: |
+                sonar.verbose=true
+            displayName: "Prepare SonarQube Analysis"
+
+          - task: SonarQubeAnalyze@5
+            displayName: "Run SonarQube Analysis"
+
+          - task: SonarQubePublish@5
+            inputs:
+              pollingTimeoutSec: '300'
+            displayName: "Publish SonarQube Quality Gate (Non-blocking)"
+            continueOnError: true
